@@ -25,9 +25,7 @@ make
 | `NCCL_CQFI_VERBOSE` | `0`/`1` | `1` | 打印注入日志 |
 | `NCCL_CQFI_STATUS` | `retry` / `flush` / `general` / `<数字>` | `retry` | 注入的 `wc.status` |
 | `NCCL_CQFI_VENDOR_ERR` | `<数字>` | `0x71` | 注入的 `wc.vendor_err` |
-| `NCCL_CQFI_AFTER` | `<n>` | `0` | 跳过前 n 个成功完成 |
-| `NCCL_CQFI_EVERY` | `<n>` | `1` | 每 n 个成功完成注入一次 |
-| `NCCL_CQFI_MAX` | `<n>` / `-1` | `1` | 最大注入次数，`-1` 表示无限制 |
+| `NCCL_CQFI_ON` | `<n>` | `0` | 在第 n 个成功完成上注入；`0` 不注入 |
 
 ## 使用示例
 
@@ -35,7 +33,7 @@ make
 export LD_PRELOAD=/path/to/nccl_cq_inject/build/libnccl_cq_fault_inject.so
 export NCCL_CQFI_STATUS=retry
 export NCCL_CQFI_VENDOR_ERR=0x113
-export NCCL_CQFI_MAX=1
+export NCCL_CQFI_ON=100
 export NCCL_CQFI_VERBOSE=1
 
 # 在所有 rank 上使用相同环境变量启动真实 NCCL 工作负载

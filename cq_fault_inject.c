@@ -54,11 +54,8 @@ static int g_enabled = 1;
 static int g_verbose = 1;
 static int g_status = IBV_WC_RETRY_EXC_ERR;
 static uint32_t g_vendor_err = 0x71;
-static unsigned long g_after = 0;
-static unsigned long g_every = 1;
-static long g_max = 1;
+static unsigned long g_on_nth = 0;
 static atomic_ulong g_seen = 0;
-static atomic_ulong g_injected = 0;
 
 static void init_config(void);
 
@@ -122,15 +119,12 @@ static void init_config(void) {
   g_verbose = parse_bool_env("NCCL_CQFI_VERBOSE", 1);
   g_status = parse_status_env();
   g_vendor_err = (uint32_t)parse_long_env("NCCL_CQFI_VENDOR_ERR", 0x71);
-  g_after = (unsigned long)parse_long_env("NCCL_CQFI_AFTER", 0);
-  g_every = (unsigned long)parse_long_env("NCCL_CQFI_EVERY", 1);
-  if (g_every == 0) g_every = 1;
-  g_max = parse_long_env("NCCL_CQFI_MAX", 1);
+  g_on_nth = (unsigned long)parse_long_env("NCCL_CQFI_ON", 0);
 
   if (g_verbose) {
     fprintf(stderr,
-            "[inject] config enabled=%d status=%d vendor_err=0x%x after=%lu every=%lu max=%ld\n",
-            g_enabled, g_status, g_vendor_err, g_after, g_every, g_max);
+            "[inject] config enabled=%d status=%d vendor_err=0x%x on_nth=%lu\n",
+            g_enabled, g_status, g_vendor_err, g_on_nth);
   }
 }
 
@@ -149,23 +143,9 @@ static poll_cq_fn find_old_poll_cq(struct ibv_context* ctx) {
 }
 
 static int should_inject_one(void) {
+  if (g_on_nth == 0) return 0;
   unsigned long seen = atomic_fetch_add_explicit(&g_seen, 1, memory_order_relaxed) + 1;
-  if (seen <= g_after) return 0;
-  if (((seen - g_after - 1) % g_every) != 0) return 0;
-
-  if (g_max < 0) {
-    atomic_fetch_add_explicit(&g_injected, 1, memory_order_relaxed);
-    return 1;
-  }
-
-  for (;;) {
-    unsigned long injected = atomic_load_explicit(&g_injected, memory_order_relaxed);
-    if (injected >= (unsigned long)g_max) return 0;
-    if (atomic_compare_exchange_weak_explicit(
-            &g_injected, &injected, injected + 1, memory_order_relaxed, memory_order_relaxed)) {
-      return 1;
-    }
-  }
+  return seen == g_on_nth;
 }
 
 static int my_poll_cq_inject(struct ibv_cq* cq, int num_entries, struct ibv_wc* wc) {
