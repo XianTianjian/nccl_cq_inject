@@ -7,7 +7,8 @@
 1. 拦截 `ibv_open_device` — 无论 NCCL 直接链接 libibverbs 还是通过 `dlvsym` 动态获取符号，都能截获。
 2. Linux 下额外拦截 `dlvsym`：当 NCCL 请求 `ibv_open_device` 时，保存真实函数指针并返回本库的包装函数。
 3. 在真实 `ibv_open_device` 返回的 `ibv_context` 上 patch `ctx->ops.poll_cq` 函数指针。
-4. 被替换的 `poll_cq` 先调用原始函数拿到真实的完成事件（`ibv_wc`），再将其中的**成功完成**（`status == IBV_WC_SUCCESS`）按配置规则改写为错误完成。
+4. 额外拦截 `ibv_create_cq`，记录每个 CQ 的 `cqe` 大小，用于区分 NCCL data/probing/recovery CQ。
+5. 被替换的 `poll_cq` 先调用原始函数拿到真实的完成事件（`ibv_wc`），再将其中符合过滤条件的**成功完成**（`status == IBV_WC_SUCCESS`）按配置规则改写为错误完成。
 
 在 NCCL 2.30.x 上，错误最终流入 `wrap_ibv_poll_cq()`，触发 NCCL 的 IB transport 错误处理（重传 / QP 重建 / failover）。
 
@@ -40,13 +41,32 @@ make
 - **类型**：正整数 / `0`
 - **默认**：`0`
 
-**核心参数**。指定在第几个**成功的 CQ 完成**上注入错误。计数器在库加载后从 1 开始递增，跨所有 IB 设备上下文共享（即同一进程内所有 `ibv_poll_cq` 调用共用一个计数器）。
+**核心参数**。指定在第几个**符合过滤条件的成功 CQ 完成**上注入错误。计数器在库加载后从 1 开始递增，跨所有 IB 设备上下文共享（即同一进程内所有 `ibv_poll_cq` 调用共用一个计数器）。
 
 - `0`：不注入（禁用）。
 - `1`：在第一个成功完成上注入，通常对应连接建立阶段。
 - `N`（N > 1）：前 N-1 个成功完成正常放行，第 N 个被改写为错误。
 
-注意：计数器统计的是成功完成（`IBV_WC_SUCCESS`）次数，已经失败 / 有 error 的完成不会计数。因此如果你需要"跳过连接建立阶段的 CQ、在业务数据传输阶段注入"，需要先跑一次 baseline 看连接阶段产生多少次成功完成，再设定合适的 `ON` 值。
+注意：计数器统计的是通过过滤后的成功完成（`IBV_WC_SUCCESS`）次数，已经失败 / 有 error 的完成不会计数。建议用 `NCCL_CQFI_CQ_MIN_CQE=21` 跳过 NCCL recovery/probing CQ 后，再用 `ON=1` 表示第一个 data CQE。
+
+### `NCCL_CQFI_EVERY` / `NCCL_CQFI_MAX`
+
+- **默认**：`EVERY=1`，`MAX=1`
+
+从 `NCCL_CQFI_ON` 命中的完成开始，每隔 `EVERY` 个符合过滤条件的完成注入一次，最多注入 `MAX` 次。`MAX=-1` 表示不限制次数。
+
+### 过滤参数
+
+| 参数 | 默认 | 含义 |
+|---|---:|---|
+| `NCCL_CQFI_SKIP_RECOVERY_CQ` | `1` | 跳过 NCCL recovery CQ。NCCL 2.30.x recovery CQ 固定 `cqe=20`。 |
+| `NCCL_CQFI_SKIP_DUMMY_WR` | `1` | 跳过 `wr_id=UINT64_MAX` 的 receiver dummy WR。 |
+| `NCCL_CQFI_CQ_MIN_CQE` | unset | 只注入 `cqe >= min` 的 CQ。常用 `21` 表示只看 data CQ。 |
+| `NCCL_CQFI_CQ_MAX_CQE` | unset | 只注入 `cqe <= max` 的 CQ。 |
+| `NCCL_CQFI_OPCODE` | `any` | 只注入指定 opcode：`rdma_write`、`rdma_read`、`recv_rdma_with_imm`、`send`、`recv` 或数字。 |
+| `NCCL_CQFI_QP_NUM` | unset | 只注入指定 `wc.qp_num`。 |
+| `NCCL_CQFI_DEV_NAME` | unset | 只注入指定 verbs 设备名，如 `mlx5_0` 或 `mlx5_1`。需要库记录 `ibv_create_qp`。 |
+| `NCCL_CQFI_WR_ID_MIN` / `NCCL_CQFI_WR_ID_MAX` | unset | 只注入指定 `wr_id` 范围。 |
 
 ### `NCCL_CQFI_STATUS`
 
@@ -82,7 +102,9 @@ make
 export LD_PRELOAD=/path/to/nccl_cq_inject/build/libnccl_cq_fault_inject.so
 export NCCL_CQFI_STATUS=retry
 export NCCL_CQFI_VENDOR_ERR=0x113
-export NCCL_CQFI_ON=100     # 前 99 个成功完成正常，第 100 个注入错误
+export NCCL_CQFI_CQ_MIN_CQE=21
+export NCCL_CQFI_ON=1       # 第一个 data CQE 注入错误
+export NCCL_CQFI_MAX=1
 export NCCL_CQFI_VERBOSE=1
 
 # 通过 mpirun 将环境变量传递给所有 rank

@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">112/113 NCCL NIC topology and vNIC merge constraints</title>
+  <desc id="desc">Two NUMA domains with one GPU and two NIC ports each. mlx5_0 and mlx5_2 are down, mlx5_1 and mlx5_3 are active. Same-card PATH_PORT merge is unavailable because one port is down, while active mlx5_1 plus mlx5_3 is cross-NUMA PATH_SYS and rejected by NCCL topology parenting.</desc>
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .panel { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2; rx: 14; }
+      .subtle { fill: #64748b; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 18px; }
+      .title { fill: #0f172a; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 28px; font-weight: 700; }
+      .h2 { fill: #0f172a; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 22px; font-weight: 700; }
+      .text { fill: #1e293b; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 17px; }
+      .small { fill: #334155; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 15px; }
+      .gpu { fill: #e8f1ff; stroke: #2563eb; stroke-width: 2; rx: 10; }
+      .nic-up { fill: #e9f7ef; stroke: #15803d; stroke-width: 2; rx: 10; }
+      .nic-down { fill: #fdecec; stroke: #b91c1c; stroke-width: 2; rx: 10; }
+      .note { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 12; }
+      .pix { stroke: #2563eb; stroke-width: 3; fill: none; }
+      .port { stroke: #15803d; stroke-width: 3; fill: none; }
+      .sys { stroke: #64748b; stroke-width: 2.5; fill: none; stroke-dasharray: 8 7; }
+      .reject { stroke: #dc2626; stroke-width: 3; fill: none; stroke-dasharray: 10 7; }
+      .divider { stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 6 8; }
+      .badge-up { fill: #15803d; }
+      .badge-down { fill: #b91c1c; }
+      .badge-warn { fill: #c2410c; }
+      .badge-text { fill: #ffffff; font-family: "Songti SC", "PingFang SC", sans-serif; font-size: 13px; font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="760"/>
+  <text class="title" x="600" y="42" text-anchor="middle">112 / 113 单机拓扑：当前无法形成有效 GPU-local ndevs=2 vNIC</text>
+  <text class="subtle" x="600" y="72" text-anchor="middle">两台机器拓扑对称；仅 mlx5_1 与 mlx5_3 为 ACTIVE，二者跨 NUMA</text>
+
+  <rect class="panel" x="70" y="95" width="500" height="400"/>
+  <rect class="panel" x="630" y="95" width="500" height="400"/>
+  <line class="divider" x1="600" y1="105" x2="600" y2="485"/>
+
+  <text class="h2" x="320" y="130" text-anchor="middle">NUMA 0</text>
+  <text class="small" x="320" y="155" text-anchor="middle">CPU affinity: 0-31,64-95</text>
+  <text class="h2" x="880" y="130" text-anchor="middle">NUMA 1</text>
+  <text class="small" x="880" y="155" text-anchor="middle">CPU affinity: 32-63,96-127</text>
+
+  <rect class="gpu" x="250" y="185" width="150" height="76"/>
+  <text class="h2" x="325" y="214" text-anchor="middle">GPU0</text>
+  <text class="small" x="325" y="238" text-anchor="middle">A100 PCIe</text>
+  <text class="small" x="325" y="256" text-anchor="middle">0000:4f:00.0</text>
+
+  <rect class="gpu" x="810" y="185" width="150" height="76"/>
+  <text class="h2" x="885" y="214" text-anchor="middle">GPU1</text>
+  <text class="small" x="885" y="238" text-anchor="middle">A100 PCIe</text>
+  <text class="small" x="885" y="256" text-anchor="middle">0000:cc:00.0</text>
+
+  <rect class="nic-down" x="125" y="340" width="185" height="88"/>
+  <text class="h2" x="217.5" y="369" text-anchor="middle">NIC0 / mlx5_0</text>
+  <text class="small" x="217.5" y="393" text-anchor="middle">0000:4b:00.0</text>
+  <rect class="badge-down" x="174" y="404" width="87" height="20" rx="10"/>
+  <text class="badge-text" x="217.5" y="419" text-anchor="middle">DOWN</text>
+
+  <rect class="nic-up" x="330" y="340" width="185" height="88"/>
+  <text class="h2" x="422.5" y="369" text-anchor="middle">NIC1 / mlx5_1</text>
+  <text class="small" x="422.5" y="393" text-anchor="middle">0000:4b:00.1</text>
+  <rect class="badge-up" x="373" y="404" width="99" height="20" rx="10"/>
+  <text class="badge-text" x="422.5" y="419" text-anchor="middle">ACTIVE</text>
+
+  <rect class="nic-down" x="685" y="340" width="185" height="88"/>
+  <text class="h2" x="777.5" y="369" text-anchor="middle">NIC2 / mlx5_2</text>
+  <text class="small" x="777.5" y="393" text-anchor="middle">0000:ce:00.0</text>
+  <rect class="badge-down" x="734" y="404" width="87" height="20" rx="10"/>
+  <text class="badge-text" x="777.5" y="419" text-anchor="middle">DOWN</text>
+
+  <rect class="nic-up" x="890" y="340" width="185" height="88"/>
+  <text class="h2" x="982.5" y="369" text-anchor="middle">NIC3 / mlx5_3</text>
+  <text class="small" x="982.5" y="393" text-anchor="middle">0000:ce:00.1</text>
+  <rect class="badge-up" x="933" y="404" width="99" height="20" rx="10"/>
+  <text class="badge-text" x="982.5" y="419" text-anchor="middle">ACTIVE</text>
+
+  <path class="pix" d="M300 261 C280 295 250 310 218 340"/>
+  <path class="pix" d="M350 261 C370 295 395 310 423 340"/>
+  <text class="small" x="190" y="310" text-anchor="middle">PIX</text>
+  <text class="small" x="455" y="310" text-anchor="middle">PIX</text>
+
+  <path class="pix" d="M860 261 C840 295 810 310 778 340"/>
+  <path class="pix" d="M910 261 C930 295 955 310 983 340"/>
+  <text class="small" x="750" y="310" text-anchor="middle">PIX</text>
+  <text class="small" x="1015" y="310" text-anchor="middle">PIX</text>
+
+  <path class="sys" d="M400 205 C545 180 640 210 685 340"/>
+  <path class="sys" d="M250 205 C115 185 75 320 125 365"/>
+  <path class="sys" d="M960 205 C1085 185 1130 320 1075 365"/>
+  <path class="sys" d="M810 205 C665 180 570 210 515 340"/>
+  <text class="small" x="600" y="205" text-anchor="middle">跨 NUMA 为 SYS</text>
+
+  <line class="port" x1="310" y1="450" x2="330" y2="450"/>
+  <text class="small" x="320" y="477" text-anchor="middle">同卡 PATH_PORT，但 mlx5_0 Down</text>
+  <line class="port" x1="870" y1="450" x2="890" y2="450"/>
+  <text class="small" x="880" y="477" text-anchor="middle">同卡 PATH_PORT，但 mlx5_2 Down</text>
+
+  <path class="reject" d="M423 428 C525 535 880 535 983 428"/>
+  <rect class="note" x="355" y="515" width="490" height="76"/>
+  <text class="text" x="600" y="545" text-anchor="middle">mlx5_1 + mlx5_3 是 ACTIVE + ACTIVE，但 LCA 到 system</text>
+  <text class="text" x="600" y="572" text-anchor="middle">PATH_SYS 跨 NUMA：2.30.7 在 ncclTopoGetVNicParent() 拒绝</text>
+
+  <rect class="panel" x="70" y="620" width="1060" height="95"/>
+  <text class="h2" x="105" y="650">结论</text>
+  <text class="text" x="105" y="680">每个 GPU 当前只有 1 个本地 PIX 且 ACTIVE 的 NIC：GPU0→mlx5_1，GPU1→mlx5_3。</text>
+  <text class="text" x="105" y="706">PORT=1，PIX=4，SYS=9；默认 merge level 为 PATH_PORT。跨 NUMA force/SYS merge 不会变成 GPU-local 设备。</text>
+
+  <line class="pix" x1="900" y1="650" x2="950" y2="650"/>
+  <text class="small" x="960" y="655">PIX 本地路径</text>
+  <line class="port" x1="900" y1="680" x2="950" y2="680"/>
+  <text class="small" x="960" y="685">PATH_PORT 同卡</text>
+  <line class="reject" x1="900" y1="710" x2="950" y2="710"/>
+  <text class="small" x="960" y="715">PATH_SYS 拒绝</text>
+</svg>
