@@ -2,6 +2,8 @@
 
 一个独立的 LD_PRELOAD 共享库，在真实 NCCL / ibverbs 运行中向 InfiniBand Completion Queue 注入错误，用于验证 NCCL 的 RDMA 错误处理路径（failover、重传、flush 等）。本工具不修改 NCCL 源码，不影响 NCCL 构建。
 
+搭配 [`nccl_ar_detail`](https://github.com/XianTianjian/nccl-tests) 逐次计时工具使用，可精确到每次迭代观察 failover / recovery 的延时 spike。
+
 ## 工作原理
 
 本库通过拦截以下 ibverbs 符号实现对 CQ 完成事件的注入：
@@ -220,3 +222,192 @@ export NCCL_CQFI_WR_ID_MAX=42
 - `created cq/qp` 行：每个 CQ / QP 被创建时记录，用于后续过滤匹配。
 - `destroying cq/qp` 行：CQ / QP 销毁时清理记录。
 - `injected` 行：每次注入时打印，包含被注入的 CQ、WR、opcode、QP、设备名、新旧 status 及当前计数器值。
+
+---
+
+## 配套工具：nccl_ar_detail
+
+逐次 CUDA event 计时的 NCCL collective benchmark。位于 [XianTianjian/nccl-tests](https://github.com/XianTianjian/nccl-tests)，文件 `src/nccl_ar_detail.cu`。
+
+与官方 `all_reduce_perf` 的区别：官方只算均值，本工具在循环**内** `cudaEventRecord`，记录每次迭代的精确耗时到 JSON `detail` 数组。
+
+### 构建
+
+```sh
+git clone https://github.com/XianTianjian/nccl-tests.git
+cd nccl-tests
+nvcc -o nccl_ar_detail src/nccl_ar_detail.cu \
+  -I$NCCL_HOME/include -I$MPI_HOME/include \
+  -L$NCCL_HOME/lib -L$MPI_HOME/lib -lnccl -lmpi -lcudart
+```
+
+### 用法
+
+```
+nccl_ar_detail [-b min] [-e max] [-f factor] [-n iters] [-w warmup] [-o op] [-J json] [-v]
+```
+
+| 参数 | 含义 | 默认 |
+|------|------|------|
+| `-b 8M` | 起始大小 | 8M |
+| `-e 256M` | 最大大小 | 8M |
+| `-f 2` | 步进倍数 | 2 |
+| `-n 200` | 每档迭代次数 | 20 |
+| `-w 10` | warmup 次数 | 1 |
+| `-o op` | collective 类型 | `all_reduce` |
+| `-J out.json` | JSON 输出路径 | 无 |
+| `-v` | 打印表格到 stdout | 关 |
+
+支持的 op：`all_reduce`、`all_gather`、`reduce_scatter`、`broadcast`、`reduce`。
+
+### JSON 输出格式
+
+```json
+{
+  "nccl_version": 23007,
+  "n_ranks": 2,
+  "op": "all_reduce",
+  "data_ok": true,
+  "detail": [
+    {"round": 0, "size": 8388608, "count": 2097152, "op": "all_reduce",
+     "type": "float", "oop_time_us": 826.6, "ip_time_us": 760.5},
+    {"round": 1, "size": 8388608, "count": 2097152, "op": "all_reduce",
+     "type": "float", "oop_time_us": 11532.0, "ip_time_us": 11057.6},
+    ...
+  ]
+}
+```
+
+spike（如 `11532us`，正常 ~800us）精确标记了 failover / recovery 发生的迭代。
+
+### 分析 JSON
+
+```sh
+python3 -c "
+import json
+d=json.load(open('out.json'))
+det=d['detail']
+oop=[x['oop_time_us'] for x in det]
+avg=sum(oop)/len(oop)
+spikes=sum(1 for v in oop if v>avg*3)
+print(f'entries={len(det)} ok={d[\"data_ok\"]} avg={avg:.0f}us spikes={spikes}')
+"
+```
+
+---
+
+## Failback 完整测试流程
+
+以两台 A100 机器（xfusion-2 / xfusion-3，各 2 GPU，4× mlx5 100G RoCE）为例，配置 NCCL 2.30.7。
+
+### 环境准备
+
+两台机器上都需要：
+
+```sh
+# 注入器
+git clone https://github.com/XianTianjian/nccl_cq_inject.git
+cd nccl_cq_inject && make
+
+# 计时工具
+git clone https://github.com/XianTianjian/nccl-tests.git
+cd nccl-tests
+nvcc -o nccl_ar_detail src/nccl_ar_detail.cu \
+  -I$NCCL_HOME/include -I$MPI_HOME/include \
+  -L$NCCL_HOME/lib -L$MPI_HOME/lib -lnccl -lmpi -lcudart
+```
+
+### 运行
+
+```bash
+ssh 192.168.5.112
+
+NCCL_LIB=/home/xiajinyi25/nccl_inject/nccl/build/lib
+INJECT_SO=/home/xiajinyi25/nccl_inject/ib_cq_fault_inject/build/libnccl_cq_fault_inject.so
+BIN=/home/xiajinyi25/nccl_inject/nccl_ar_detail
+
+pkill -9 nccl_ar_detail 2>/dev/null; pkill -9 mpirun 2>/dev/null
+ssh 192.168.5.113 "pkill -9 nccl_ar_detail; pkill -9 mpirun" 2>/dev/null
+sleep 1; rm -f /tmp/fb.json
+
+ENVS="LD_LIBRARY_PATH=$NCCL_LIB LD_PRELOAD=$INJECT_SO \
+  NCCL_CQFI_ENABLE=1 NCCL_CQFI_ON=1 NCCL_CQFI_MAX=1 NCCL_CQFI_OPCODE=1 \
+  NCCL_CQFI_DEV_NAME=mlx5_0 NCCL_CQFI_SKIP_RECOVERY_CQ=1 \
+  NCCL_IB_HCA=mlx5_0,mlx5_1 NCCL_NET_FORCE_MERGE=mlx5_0,mlx5_1 \
+  NCCL_IB_RESILIENCY_PORT_FAILOVER=1 NCCL_IB_RESILIENCY_PORT_RECOVERY=1 \
+  NCCL_IB_RESILIENCY_PORT_RECOVERY_START_DELAY=10 \
+  NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_TIMEOUT=1000 \
+  NCCL_IB_RESILIENCY_PORT_RECOVERY_ACK_TIMEOUT=1000 \
+  NCCL_IB_RESILIENCY_PORT_RECOVERY_ATTEMPTS_MAX=20 \
+  NCCL_NETDEVS_POLICY=ALL NCCL_GDR_FLUSH_DISABLE=1 NCCL_IB_TIMEOUT=100 \
+  NCCL_DEBUG=TRACE NCCL_DEBUG_SUBSYS=NET"
+
+mpirun --mca pml ob1 --mca btl tcp,self \
+  --mca btl_tcp_if_include bond0 --mca oob_tcp_if_include bond0 \
+  -np 1 -H 192.168.5.112:1 \
+    /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=1024 NCCL_CQFI_CQ_MAX_CQE=1024 \
+    $BIN -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /tmp/fb.json \
+  : \
+  -np 1 -H 192.168.5.113:1 \
+    /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=2048 NCCL_CQFI_CQ_MAX_CQE=2048 \
+    $BIN -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /dev/null \
+  2>&1 | tee /tmp/fb.log
+```
+
+### 查看结果
+
+```bash
+# failover + recovery 完整日志
+grep -E "recovery succeeded|marked.*recovered|Restoring QP|completed|marked as failed" /tmp/fb.log
+
+# benchmark 表格
+grep "^#" /tmp/fb.log
+
+# JSON spike 统计
+python3 -c "
+import json
+d=json.load(open('/tmp/fb.json'))
+det=d['detail']
+oop=[x['oop_time_us'] for x in det]
+avg=sum(oop)/len(oop)
+spikes=sum(1 for v in oop if v>avg*3)
+print(f'entries={len(det)} ok={d[\"data_ok\"]} avg={avg:.0f}us spikes={spikes}')
+"
+```
+
+预期输出：
+
+```
+entries=1200 ok=True avg=7122us spikes=3
+
+Port recovery succeeded for devIndex=0 (send comm)
+Port recovery succeeded for devIndex=0 (recv comm)
+Marking device 0 as recovered
+Restoring QP (index=0, qp_num=7886) on device 0
+All resiliency operations are completed
+```
+
+### 参数说明
+
+| 参数 | 作用 | 112 值 | 113 值 |
+|------|------|--------|--------|
+| `NCCL_CQFI_DEV_NAME` | 注入目标设备 | `mlx5_0` | `mlx5_0` |
+| `NCCL_CQFI_CQ_MIN_CQE` | 只注入 data CQ | `1024` | `2048` |
+| `NCCL_CQFI_CQ_MAX_CQE` | CQE 大小上限 | `1024` | `2048` |
+| `NCCL_IB_HCA` | 限定 NCCL 使用的 IB 设备 | `mlx5_0,mlx5_1` | `mlx5_0,mlx5_1` |
+| `NCCL_IB_RESILIENCY_PORT_FAILOVER` | 启用 failover | `1` | `1` |
+| `NCCL_IB_RESILIENCY_PORT_RECOVERY` | 启用 recovery | `1` | `1` |
+
+NCCL 2.30.7 中 resiliency 参数名以 `NCCL_IB_RESILIENCY_` 为前缀（非 `NCCL_PORT_`）。
+
+### 切换 collective
+
+只需在两边的 `$BIN` 参数中加 `-o`：
+
+```bash
+# all_gather（无 in-place）
+$BIN -o all_gather -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /tmp/fb.json
+
+# reduce_scatter
+$BIN -o reduce_scatter -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /tmp/fb.json
+```
