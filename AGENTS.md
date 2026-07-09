@@ -148,7 +148,7 @@ NCCL_LIB=$WORKDIR/nccl/build/lib
 INJECT_SO=$WORKDIR/ib_cq_fault_inject/build/libnccl_cq_fault_inject.so
 BIN=$WORKDIR/nccl_ar_detail
 
-ENVS="LD_LIBRARY_PATH=$NCCL_LIB LD_PRELOAD=$INJECT_SO \
+ENVS="LD_LIBRARY_PATH=$NCCL_LIB:/usr/local/cuda/lib64:/usr/lib64 LD_PRELOAD=$INJECT_SO \
   NCCL_CQFI_ENABLE=1 NCCL_CQFI_ON=1 NCCL_CQFI_DEV_NAME=mlx5_0 \
   NCCL_IB_HCA=mlx5_0,mlx5_1 \
   NCCL_IB_RESILIENCY_PORT_FAILOVER=1 NCCL_IB_RESILIENCY_PORT_RECOVERY=1 \
@@ -164,9 +164,35 @@ mpirun --oversubscribe --mca btl_tcp_if_include bond0 \
 ```
 
 注意：
-- 用主机名，不用 IP
-- MPMD 模式下两边 `CQ_MIN_CQE` 不同（data send=1024, data recv=2048）
+- SSH 清理命令可使用 IP；OpenMPI `-H` 参数应使用主机名，避免 OpenMPI 4.1.9a1 在 IP 模式下卡住。
+- MPMD 模式下两边 `CQ_MIN_CQE` 不同（data send=1024, data recv=2048），不要在未明确测试其他故障模式时把两侧 CQE 改成相同值。
 - 113 的 `-J /dev/null` 表示不写 JSON（只有 rank 0 写）
+
+## Run Modes
+
+### Baseline
+```bash
+NCCL_CQFI_ENABLE=0
+NCCL_CQFI_ON=0
+NCCL_IB_RESILIENCY_PORT_FAILOVER=0
+NCCL_IB_RESILIENCY_PORT_RECOVERY=0
+```
+
+### Failover-only
+```bash
+NCCL_CQFI_ENABLE=1
+NCCL_CQFI_ON=1
+NCCL_IB_RESILIENCY_PORT_FAILOVER=1
+NCCL_IB_RESILIENCY_PORT_RECOVERY=0
+```
+
+### Recovery / Failback
+```bash
+NCCL_CQFI_ENABLE=1
+NCCL_CQFI_ON=1
+NCCL_IB_RESILIENCY_PORT_FAILOVER=1
+NCCL_IB_RESILIENCY_PORT_RECOVERY=1
+```
 
 ## Known Issues
 
@@ -178,7 +204,7 @@ mpirun --oversubscribe --mca btl_tcp_if_include bond0 \
 
 4. **stdio 缓冲丢数据** — `fprintf` 写 JSON 时 stdio 全缓冲，进程被 timeout 杀时 `{` 都未刷盘。修复：`setbuf(json_fp, NULL)`。
 
-5. **`-v` flag bug** — 早期版本 `case 'v':` 缺失导致 useage 退出。已修复。
+5. **`-v` flag bug** — 早期版本 `case 'v':` 缺失导致 usage 退出。已修复。
 
 ## Verified Test Result
 
