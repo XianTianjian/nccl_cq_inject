@@ -510,14 +510,45 @@ static ibv_open_device_fn get_real_ibv_open_device(void) {
   return (ibv_open_device_fn)real;
 }
 
+/* Explicitly load libibverbs to make symbols available for RTLD_NEXT resolution.
+   Needed because NCCL loads ibverbs lazily via dlopen, so early dlsym(RTLD_NEXT)
+   calls return our own wrappers instead of the real functions. */
+static void* ensure_ibverbs_loaded(void) {
+  static void* handle = NULL;
+  static int tried = 0;
+  if (!tried) {
+    tried = 1;
+    handle = dlopen("libibverbs.so.1", RTLD_LAZY | RTLD_NOLOAD);
+    if (handle == NULL) {
+      handle = dlopen("libibverbs.so.1", RTLD_LAZY);
+    }
+  }
+  return handle;
+}
+
+static void* ibv_dlsym_fallback(const char* name) {
+  void* real = dlsym(RTLD_NEXT, name);
+  if (real != NULL && real != (void*)ibv_open_device && real != (void*)ibv_create_cq &&
+      real != (void*)ibv_destroy_cq && real != (void*)ibv_create_qp && real != (void*)ibv_destroy_qp) {
+    return real;
+  }
+  /* RTLD_NEXT returned our own wrapper; try explicit handle */
+  void* handle = ensure_ibverbs_loaded();
+  if (handle != NULL) {
+    void* from_handle = dlsym(handle, name);
+    if (from_handle != NULL) return from_handle;
+  }
+  return NULL;
+}
+
 static ibv_create_cq_fn get_real_ibv_create_cq(void) {
   pthread_mutex_lock(&g_lock);
   ibv_create_cq_fn fn = g_real_ibv_create_cq;
   pthread_mutex_unlock(&g_lock);
   if (fn != NULL) return fn;
 
-  void* real = dlsym(RTLD_NEXT, "ibv_create_cq");
-  if (real == NULL || real == (void*)ibv_create_cq) return NULL;
+  void* real = ibv_dlsym_fallback("ibv_create_cq");
+  if (real == NULL) return NULL;
 
   pthread_mutex_lock(&g_lock);
   if (g_real_ibv_create_cq == NULL) g_real_ibv_create_cq = (ibv_create_cq_fn)real;
@@ -532,8 +563,8 @@ static ibv_destroy_cq_fn get_real_ibv_destroy_cq(void) {
   pthread_mutex_unlock(&g_lock);
   if (fn != NULL) return fn;
 
-  void* real = dlsym(RTLD_NEXT, "ibv_destroy_cq");
-  if (real == NULL || real == (void*)ibv_destroy_cq) return NULL;
+  void* real = ibv_dlsym_fallback("ibv_destroy_cq");
+  if (real == NULL) return NULL;
 
   pthread_mutex_lock(&g_lock);
   if (g_real_ibv_destroy_cq == NULL) g_real_ibv_destroy_cq = (ibv_destroy_cq_fn)real;
@@ -548,8 +579,8 @@ static ibv_create_qp_fn get_real_ibv_create_qp(void) {
   pthread_mutex_unlock(&g_lock);
   if (fn != NULL) return fn;
 
-  void* real = dlsym(RTLD_NEXT, "ibv_create_qp");
-  if (real == NULL || real == (void*)ibv_create_qp) return NULL;
+  void* real = ibv_dlsym_fallback("ibv_create_qp");
+  if (real == NULL) return NULL;
 
   pthread_mutex_lock(&g_lock);
   if (g_real_ibv_create_qp == NULL) g_real_ibv_create_qp = (ibv_create_qp_fn)real;
@@ -564,8 +595,8 @@ static ibv_destroy_qp_fn get_real_ibv_destroy_qp(void) {
   pthread_mutex_unlock(&g_lock);
   if (fn != NULL) return fn;
 
-  void* real = dlsym(RTLD_NEXT, "ibv_destroy_qp");
-  if (real == NULL || real == (void*)ibv_destroy_qp) return NULL;
+  void* real = ibv_dlsym_fallback("ibv_destroy_qp");
+  if (real == NULL) return NULL;
 
   pthread_mutex_lock(&g_lock);
   if (g_real_ibv_destroy_qp == NULL) g_real_ibv_destroy_qp = (ibv_destroy_qp_fn)real;
