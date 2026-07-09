@@ -128,6 +128,8 @@ NCCL_IB_RESILIENCY_PORT_RECOVERY_ATTEMPTS_MAX=20         # 最多重试次数
 - `--oversubscribe` 允许单节点多进程
 - `--mca btl_tcp_if_include bond0` 指定 TCP 通信走管理网口
 - 用 `/usr/bin/env` 传环境变量，避免 mpirun `-x` 展开问题
+- 113 的 `-J /dev/null` 表示不写 JSON（只有 rank 0 写）
+- MPMD 模式下两边 `CQ_MIN_CQE` 不同（data send=1024, data recv=2048），不要随意改成相同值
 
 ## Standard Run Workflow
 
@@ -149,19 +151,22 @@ ssh 192.168.5.113 'ls /tmp/ompi.* 2>/dev/null'
 # 检查 IB 网卡占用（核心资源）
 ssh 192.168.5.112 'rdma link show 2>/dev/null || ibv_devinfo 2>/dev/null | grep -E "hca_id|state"'
 ssh 192.168.5.113 'rdma link show 2>/dev/null || ibv_devinfo 2>/dev/null | grep -E "hca_id|state"'
-# 如 PORT_ACTIVE 但其他实验的 MPI 进程在跑，仍需等待
 ```
 
-确认 GPU 空闲、无他人 MPI session 后，清理本实验残留：
+确认 GPU 空闲、无他人 MPI session、IB 设备 PORT_ACTIVE 后，运行实验。
+
+### 单 size 独立实验（推荐）
+
+脚本 `run_size_200.sh`，每个 size 独立跑 200 次迭代，各自拥有完整的 failover + recovery 时间线：
 
 ```bash
-# 清理残留（只清自己的进程，不杀别人的）
-ssh 192.168.5.112 'pkill -9 -u $USER nccl_ar_detail; pkill -9 -u $USER mpirun'
-ssh 192.168.5.113 'pkill -9 -u $USER nccl_ar_detail; pkill -9 -u $USER mpirun'
-sleep 1
+scp run_size_200.sh 192.168.5.112:/home/xiajinyi25/nccl_inject/
+ssh 192.168.5.112 'bash /home/xiajinyi25/nccl_inject/run_size_200.sh'
 ```
 
-推荐 MPI 骨架（在 112 上执行）：
+产物：`/tmp/size_{8M,16M,32M,64M,128M,256M}_200.json`
+
+### 多 size 连续实验
 
 ```bash
 ssh 192.168.5.112
@@ -185,11 +190,6 @@ mpirun --oversubscribe --mca btl_tcp_if_include bond0 \
   /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=2048 NCCL_CQFI_CQ_MAX_CQE=2048 \
   $BIN -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /dev/null
 ```
-
-注意：
-- SSH 清理命令可使用 IP；OpenMPI `-H` 参数应使用主机名，避免 OpenMPI 4.1.9a1 在 IP 模式下卡住。
-- MPMD 模式下两边 `CQ_MIN_CQE` 不同（data send=1024, data recv=2048），不要在未明确测试其他故障模式时把两侧 CQE 改成相同值。
-- 113 的 `-J /dev/null` 表示不写 JSON（只有 rank 0 写）
 
 ## Run Modes
 
@@ -231,7 +231,20 @@ NCCL_IB_RESILIENCY_PORT_RECOVERY=1
 
 ## Verified Test Result
 
-200 次迭代，8M–256M all_reduce，峰值 14.49 GB/s：
+### 单 size 独立 failback（200 次/档，WARN 日志）
+
+| Size | iters | oop_avg | min | max | spikes | BW | data_ok |
+|------|-------|---------|-----|-----|--------|-----|---------|
+| 8MB | 200 | 3,559us | 817 | 24,712 | 37 | 2.36 | ✅ |
+| 16MB | 200 | 5,872us | 1,229 | 32,021 | 17 | 2.86 | ✅ |
+| 32MB | 200 | 9,241us | 2,380 | 40,174 | 4 | 3.63 | ✅ |
+| 64MB | 200 | 11,119us | 4,784 | 63,904 | 11 | 6.04 | ✅ |
+| 128MB | 200 | 14,589us | 9,170 | 84,065 | 9 | 9.20 | ✅ |
+| 256MB | 200 | 19,819us | 18,035 | 77,608 | 2 | 13.54 | ✅ |
+
+小 size 尾部 spike 是 FLUSH_ERR CQE 排空行为，非恢复失败。恢复在 TRACE 日志中已确认（`Port recovery succeeded` + `Restoring QP` + `All resiliency operations completed`）。
+
+### 多 size 连续 failback（200 次/档，TRACE 日志）
 
 ```
 entries=1200  op=all_reduce  data_ok=True  sizes=6
