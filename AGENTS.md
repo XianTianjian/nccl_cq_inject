@@ -166,30 +166,29 @@ ssh 192.168.5.112 'bash /home/xiajinyi25/nccl_inject/run_size_200.sh'
 
 产物：`/tmp/size_{8M,16M,32M,64M,128M,256M}_200.json`
 
-### 多 size 连续实验
+### 多 size 连续实验（最简指令，已验证）
 
 ```bash
 ssh 192.168.5.112
 
 WORKDIR=/home/xiajinyi25/nccl_inject
-NCCL_LIB=$WORKDIR/nccl/build/lib
-INJECT_SO=$WORKDIR/ib_cq_fault_inject/build/libnccl_cq_fault_inject.so
 BIN=$WORKDIR/nccl_ar_detail
 
-ENVS="LD_LIBRARY_PATH=$NCCL_LIB:/usr/local/cuda/lib64:/usr/lib64 LD_PRELOAD=$INJECT_SO \
+ENVS="LD_PRELOAD=$WORKDIR/ib_cq_fault_inject/build/libnccl_cq_fault_inject.so \
   NCCL_CQFI_ENABLE=1 NCCL_CQFI_ON=1 NCCL_CQFI_DEV_NAME=mlx5_0 \
   NCCL_IB_HCA=mlx5_0,mlx5_1 \
-  NCCL_IB_RESILIENCY_PORT_FAILOVER=1 NCCL_IB_RESILIENCY_PORT_RECOVERY=1 \
-  NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET"
+  NCCL_IB_RESILIENCY_PORT_FAILOVER=1 NCCL_IB_RESILIENCY_PORT_RECOVERY=1"
 
 mpirun --oversubscribe --mca btl_tcp_if_include bond0 \
-  -H xfusion-2:1,xfusion-3:1 \
-  /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=1024 NCCL_CQFI_CQ_MAX_CQE=1024 \
-  $BIN -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /tmp/out.json \
-  : \
-  /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=2048 NCCL_CQFI_CQ_MAX_CQE=2048 \
-  $BIN -b 8M -e 256M -f 2 -n 200 -w 10 -v -J /dev/null
+  -np 1 -H xfusion-2:1 \
+    /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=1024 NCCL_CQFI_CQ_MAX_CQE=1024 \
+    $BIN -b 256M -e 256M -n 200 -w 10 -v -J /tmp/out.json \
+  : -np 1 -H xfusion-3:1 \
+    /usr/bin/env $ENVS NCCL_CQFI_CQ_MIN_CQE=2048 NCCL_CQFI_CQ_MAX_CQE=2048 \
+    $BIN -b 256M -e 256M -n 200 -w 10 -v -J /dev/null
 ```
+
+仅 6 个必须参数：`LD_PRELOAD`、`CQFI_ENABLE`、`CQFI_ON`、`CQFI_DEV_NAME`、`IB_HCA`、`IB_RESILIENCY_PORT_FAILOVER/RECOVERY`。如需看 recovery 日志加 `NCCL_DEBUG=TRACE NCCL_DEBUG_SUBSYS=NET`。
 
 ## Run Modes
 
