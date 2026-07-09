@@ -2,3 +2,4 @@ build/
 *.so
 *.dylib
 *.dSYM/
+data/
