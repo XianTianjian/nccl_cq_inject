@@ -2,21 +2,21 @@
 
 NCCL IB/RoCE CQ 故障注入实验。验证 NCCL 在 IB 设备 CQE 错误注入下的 failover 与 recovery 行为。
 
-## Agent Rules
+## Agent 行为约束
 
-Before making any code change, the agent must:
-1. Read this file first.
-2. Summarize the current goal and known constraints.
-3. Inspect the relevant source files before proposing a fix.
-4. Prefer minimal patches.
-5. Do not invent paths, hostnames, devices, environment variables, or NCCL parameters.
-6. If a conclusion depends on NCCL internals, cite the exact source file and function.
-7. If a conclusion depends on runtime behavior, cite the exact log line.
-8. Do not assume `ibv_poll_cq` interception alone is sufficient.
-9. Do not assume all mlx5 devices are automatically used.
-10. Do not assume cross-NUMA merge is valid unless logs/source prove it.
-11. Do not use IP addresses in `-H` unless explicitly testing MPI hostname behavior.
-12. Do not use MPICH-specific flags — this environment uses OpenMPI.
+修改代码前，Agent 必须：
+1. 先读本文件。
+2. 先复述当前目标与已知约束。
+3. 先检查相关源码再提出修改方案。
+4. 优先最小化 patch。
+5. 禁止编造路径、主机名、设备名、环境变量或 NCCL 参数。
+6. 涉及 NCCL 内部逻辑的结论，必须引用具体源文件和函数。
+7. 涉及运行时行为的结论，必须引用具体日志行。
+8. 不得假设仅靠 `ibv_poll_cq` 拦截就足够。
+9. 不得假设所有 mlx5 设备都会被自动使用。
+10. 不得假设跨 NUMA 融合有效，除非日志或源码证明。
+11. 不得在 `-H` 中使用 IP 地址，除非明确在测试 MPI 主机名行为。
+12. 不得使用 MPICH 专用参数——本环境使用 OpenMPI。
 
 ## Current Status
 
