@@ -51,7 +51,7 @@ CQE 故障注入路径已验证。观测结果：
 - RoCE: 4× mlx5_* 100Gbps
   - mlx5_0, mlx5_1 → NUMA0, PIX to GPU0
   - mlx5_2, mlx5_3 → NUMA1, PIX to GPU1
-
+- 工作文件夹: `/home/xiajinyi25/nccl_inject/`，尽量不要修改其他文件夹内容
 ## Key Paths
 
 | 内容 | 路径 |
