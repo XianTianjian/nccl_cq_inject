@@ -109,9 +109,9 @@ static atomic_long g_injected = 0;
 
 static void init_config(void);
 
-static void cqfi_log(const char* fmt, ...) {
+static void cqfi_log_level(int level, const char* fmt, ...) {
   pthread_once(&g_config_once, init_config);
-  if (!g_verbose) return;
+  if (g_verbose < level) return;
 
   va_list ap;
   va_start(ap, fmt);
@@ -120,6 +120,9 @@ static void cqfi_log(const char* fmt, ...) {
   fprintf(stderr, "\n");
   va_end(ap);
 }
+
+#define cqfi_log(...) cqfi_log_level(1, __VA_ARGS__)
+#define cqfi_debug(...) cqfi_log_level(2, __VA_ARGS__)
 
 static long parse_long_env(const char* name, long fallback) {
   const char* value = getenv(name);
@@ -196,7 +199,12 @@ static int parse_status_env(void) {
 
 static void init_config(void) {
   g_enabled = parse_bool_env("NCCL_CQFI_ENABLE", 1);
-  g_verbose = parse_bool_env("NCCL_CQFI_VERBOSE", 1);
+  const char* verbose = getenv("NCCL_CQFI_VERBOSE");
+  if (verbose != NULL && strcmp(verbose, "2") == 0) {
+    g_verbose = 2;
+  } else {
+    g_verbose = parse_bool_env("NCCL_CQFI_VERBOSE", 1);
+  }
   g_status = parse_status_env();
   g_vendor_err = (uint32_t)parse_long_env("NCCL_CQFI_VENDOR_ERR", 0x71);
   g_on_nth = (unsigned long)parse_long_env("NCCL_CQFI_ON", 0);
@@ -222,10 +230,10 @@ static void init_config(void) {
 
   if (g_verbose) {
     fprintf(stderr,
-            "[inject] config enabled=%d status=%d vendor_err=0x%x on_nth=%lu every=%lu max=%ld "
+            "[inject] config enabled=%d verbose=%d status=%d vendor_err=0x%x on_nth=%lu every=%lu max=%ld "
             "skip_recovery_cq=%d skip_dummy_wr=%d cq_min_cqe=%ld cq_max_cqe=%ld opcode=%d "
             "qp_num=%s%u wr_id_min=%s%llu wr_id_max=%s%llu dev_name=%s%s\n",
-            g_enabled, g_status, g_vendor_err, g_on_nth, g_every, g_max, g_skip_recovery_cq, g_skip_dummy_wr,
+            g_enabled, g_verbose, g_status, g_vendor_err, g_on_nth, g_every, g_max, g_skip_recovery_cq, g_skip_dummy_wr,
             g_cq_min_cqe, g_cq_max_cqe, g_opcode, g_has_qp_num ? "" : "off:", g_qp_num,
             g_has_wr_id_min ? "" : "off:", (unsigned long long)g_wr_id_min,
             g_has_wr_id_max ? "" : "off:", (unsigned long long)g_wr_id_max,
@@ -261,7 +269,7 @@ static void record_cq(struct ibv_cq* cq, int cqe) {
   entry->next = g_cq_entries;
   g_cq_entries = entry;
   pthread_mutex_unlock(&g_lock);
-  cqfi_log("created cq=%p cqe=%d", (void*)cq, cqe);
+  cqfi_debug("created cq=%p cqe=%d", (void*)cq, cqe);
 }
 
 static int forget_cq(struct ibv_cq* cq) {
@@ -322,7 +330,7 @@ static void record_qp(struct ibv_qp* qp, struct ibv_pd* pd, struct ibv_qp_init_a
   g_qp_entries = entry;
   pthread_mutex_unlock(&g_lock);
 
-  cqfi_log("created qp=%p qp_num=%u dev=%s type=%d send_cq=%p recv_cq=%p max_send_wr=%u max_recv_wr=%u",
+  cqfi_debug("created qp=%p qp_num=%u dev=%s type=%d send_cq=%p recv_cq=%p max_send_wr=%u max_recv_wr=%u",
            (void*)qp, entry->qp_num, entry->dev_name, entry->qp_type, (void*)entry->send_cq,
            (void*)entry->recv_cq, entry->max_send_wr, entry->max_recv_wr);
 }
@@ -347,11 +355,11 @@ static int forget_qp(struct ibv_qp* qp, struct qp_entry* out) {
   return found;
 }
 
-static int lookup_qp(uint32_t qp_num, struct qp_entry* out) {
+static int lookup_qp_for_cq(uint32_t qp_num, struct ibv_cq* cq, struct qp_entry* out) {
   int found = 0;
   pthread_mutex_lock(&g_lock);
   for (struct qp_entry* entry = g_qp_entries; entry != NULL; entry = entry->next) {
-    if (entry->qp_num == qp_num) {
+    if (entry->qp_num == qp_num && (entry->send_cq == cq || entry->recv_cq == cq)) {
       if (out != NULL) *out = *entry;
       found = 1;
       break;
@@ -366,7 +374,8 @@ static int completion_matches_filters(struct ibv_cq* cq, const struct ibv_wc* wc
 
   int cqe = lookup_cqe(cq);
   struct qp_entry qp_info;
-  int has_qp_info = lookup_qp(wc->qp_num, &qp_info);
+  int has_qp_info = lookup_qp_for_cq(wc->qp_num, cq, &qp_info);
+  if ((g_cq_min_cqe >= 0 || g_cq_max_cqe >= 0) && cqe < 0) return 0;
   if (g_skip_recovery_cq && cqe == 20) return 0;
   if (g_cq_min_cqe >= 0 && cqe >= 0 && cqe < g_cq_min_cqe) return 0;
   if (g_cq_max_cqe >= 0 && cqe >= 0 && cqe > g_cq_max_cqe) return 0;
@@ -417,7 +426,7 @@ static int my_poll_cq_inject(struct ibv_cq* cq, int num_entries, struct ibv_wc* 
 
     enum ibv_wc_status old_status = wc[i].status;
     struct qp_entry qp_info;
-    int has_qp_info = lookup_qp(wc[i].qp_num, &qp_info);
+    int has_qp_info = lookup_qp_for_cq(wc[i].qp_num, cq, &qp_info);
     wc[i].status = (enum ibv_wc_status)g_status;
     wc[i].vendor_err = g_vendor_err;
     cqfi_log("injected wc[%d] ctx=%p cq=%p cqe=%d wr_id=%llu opcode=%d qp_num=%u dev=%s "
@@ -446,7 +455,7 @@ static int patch_context(struct ibv_context* ctx) {
                (void*)ctx, (void*)old, (void*)current);
       ctx->ops.poll_cq = my_poll_cq_inject;
     } else {
-      cqfi_log("ctx=%p already patched old_poll_cq=%p", (void*)ctx, (void*)old);
+      cqfi_debug("ctx=%p already patched old_poll_cq=%p", (void*)ctx, (void*)old);
     }
     pthread_mutex_unlock(&g_lock);
     return 0;
@@ -623,7 +632,7 @@ struct ibv_context* ibv_open_device(struct ibv_device* device) {
   }
 
   struct ibv_context* ctx = real_open(device);
-  cqfi_log("ibv_open_device wrapper called device=%p ctx=%p", (void*)device, (void*)ctx);
+  cqfi_debug("ibv_open_device wrapper called device=%p ctx=%p", (void*)device, (void*)ctx);
   if (ctx != NULL) patch_context(ctx);
   return ctx;
 }
@@ -655,7 +664,7 @@ int ibv_destroy_cq(struct ibv_cq* cq) {
   }
 
   int cqe = forget_cq(cq);
-  cqfi_log("destroying cq=%p cqe=%d", (void*)cq, cqe);
+  cqfi_debug("destroying cq=%p cqe=%d", (void*)cq, cqe);
   return real_destroy(cq);
 }
 
@@ -686,9 +695,9 @@ int ibv_destroy_qp(struct ibv_qp* qp) {
 
   struct qp_entry entry;
   if (forget_qp(qp, &entry)) {
-    cqfi_log("destroying qp=%p qp_num=%u dev=%s", (void*)qp, entry.qp_num, entry.dev_name);
+    cqfi_debug("destroying qp=%p qp_num=%u dev=%s", (void*)qp, entry.qp_num, entry.dev_name);
   } else {
-    cqfi_log("destroying qp=%p qp_num=unknown", (void*)qp);
+    cqfi_debug("destroying qp=%p qp_num=unknown", (void*)qp);
   }
   return real_destroy(qp);
 }
@@ -707,17 +716,17 @@ void* dlvsym(void* handle, const char* symbol, const char* version) {
   if (symbol_addr != 0 && strcmp(symbol, "ibv_open_device") == 0) {
     if (is_libibverbs_symbol(real)) {
       remember_real_ibv_open_device(real);
-      cqfi_log("dlvsym intercepted ibv_open_device version=%s real=%p wrapper=%p",
+      cqfi_debug("dlvsym intercepted ibv_open_device version=%s real=%p wrapper=%p",
                version, real, (void*)ibv_open_device);
       return (void*)ibv_open_device;
     }
-    cqfi_log("dlvsym left ibv_open_device unchanged version=%s real=%p", version, real);
+    cqfi_debug("dlvsym left ibv_open_device unchanged version=%s real=%p", version, real);
   }
   if (symbol_addr != 0 && strcmp(symbol, "ibv_create_cq") == 0 && is_libibverbs_symbol(real)) {
     pthread_mutex_lock(&g_lock);
     g_real_ibv_create_cq = (ibv_create_cq_fn)real;
     pthread_mutex_unlock(&g_lock);
-    cqfi_log("dlvsym intercepted ibv_create_cq version=%s real=%p wrapper=%p",
+    cqfi_debug("dlvsym intercepted ibv_create_cq version=%s real=%p wrapper=%p",
              version, real, (void*)ibv_create_cq);
     return (void*)ibv_create_cq;
   }
@@ -725,7 +734,7 @@ void* dlvsym(void* handle, const char* symbol, const char* version) {
     pthread_mutex_lock(&g_lock);
     g_real_ibv_destroy_cq = (ibv_destroy_cq_fn)real;
     pthread_mutex_unlock(&g_lock);
-    cqfi_log("dlvsym intercepted ibv_destroy_cq version=%s real=%p wrapper=%p",
+    cqfi_debug("dlvsym intercepted ibv_destroy_cq version=%s real=%p wrapper=%p",
              version, real, (void*)ibv_destroy_cq);
     return (void*)ibv_destroy_cq;
   }
@@ -733,7 +742,7 @@ void* dlvsym(void* handle, const char* symbol, const char* version) {
     pthread_mutex_lock(&g_lock);
     g_real_ibv_create_qp = (ibv_create_qp_fn)real;
     pthread_mutex_unlock(&g_lock);
-    cqfi_log("dlvsym intercepted ibv_create_qp version=%s real=%p wrapper=%p",
+    cqfi_debug("dlvsym intercepted ibv_create_qp version=%s real=%p wrapper=%p",
              version, real, (void*)ibv_create_qp);
     return (void*)ibv_create_qp;
   }
@@ -741,7 +750,7 @@ void* dlvsym(void* handle, const char* symbol, const char* version) {
     pthread_mutex_lock(&g_lock);
     g_real_ibv_destroy_qp = (ibv_destroy_qp_fn)real;
     pthread_mutex_unlock(&g_lock);
-    cqfi_log("dlvsym intercepted ibv_destroy_qp version=%s real=%p wrapper=%p",
+    cqfi_debug("dlvsym intercepted ibv_destroy_qp version=%s real=%p wrapper=%p",
              version, real, (void*)ibv_destroy_qp);
     return (void*)ibv_destroy_qp;
   }
